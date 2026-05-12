@@ -73,6 +73,7 @@ class Dispatcher:
         from .projects.gsquant_adapter import GsQuantAdapter
         from .projects.lean_adapter import LeanAdapter
         from .projects.yanbao_adapter import YanbaoReportAdapter
+        from .projects.financial_services_adapter import FinancialServicesAdapter
 
         self.projects = {
             "qlib":            QlibAdapter(str(PROJECT_PATHS.qlib)),
@@ -86,6 +87,7 @@ class Dispatcher:
             "gs_quant":        GsQuantAdapter(),
             "lean":            LeanAdapter(),
             "yanbao_reports":  YanbaoReportAdapter(),
+            "financial_services": FinancialServicesAdapter(),
         }
         
         # 检查哪些项目可用
@@ -145,10 +147,11 @@ class Dispatcher:
             QueryType.FACTOR_ANALYSIS: ["qlib", "gs_quant"],
             QueryType.STRATEGY_SIGNAL: ["qlib", "momentum", "lean", "backtrader",
                                         "vnpy", "finrl", "fincept", "gs_quant",
-                                        "yanbao_reports"],
+                                        "yanbao_reports", "financial_services"],
             QueryType.PORTFOLIO: ["qlib", "backtrader", "momentum", "lean"],
             QueryType.DEBATE_REQUEST: ["qlib", "momentum", "lean", "tradingagents",
-                                       "backtrader", "vnpy", "yanbao_reports"],
+                                       "backtrader", "vnpy", "yanbao_reports",
+                                       "financial_services"],
         }
         return mapping.get(query.query_type, ["qlib"])
     

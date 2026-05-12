@@ -17,6 +17,7 @@ def _register_all():
     from .qlib_adapter import QlibAdapter
     from .finrl_adapter import FinrlAdapter
     from .yanbao_adapter import YanbaoReportAdapter
+    from .financial_services_adapter import FinancialServicesAdapter
 
     register_adapter('tradingagents', TradingAgentsAdapter)
     register_adapter('backtrader', BacktraderAdapter)
@@ -25,6 +26,7 @@ def _register_all():
     register_adapter('qlib', QlibAdapter)
     register_adapter('finrl', FinrlAdapter)
     register_adapter('yanbao_reports', YanbaoReportAdapter)
+    register_adapter('financial_services', FinancialServicesAdapter)
 
 
 # 自动注册
@@ -45,29 +47,29 @@ logger = logging.getLogger(__name__)
 
 class BaseAdapter(ABC):
     """项目适配器基类"""
-    
+
     def __init__(self, project_path: str):
         self.project_path = Path(project_path)
         self.available = None  # 缓存可用性检查
-    
+
     def is_available(self) -> bool:
         """检查项目是否可用"""
         if self.available is not None:
             return self.available
-        
+
         self.available = self._check_available()
         return self.available
-    
+
     @abstractmethod
     def _check_available(self) -> bool:
         """实际检查逻辑，子类实现"""
         pass
-    
+
     @abstractmethod
     def execute(self, query: Query) -> ProjectResult:
         """执行查询并返回结果"""
         pass
-    
+
     def _validate_query(self, query: Query) -> bool:
         """验证查询是否适用于本项目"""
         return True

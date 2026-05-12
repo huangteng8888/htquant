@@ -90,7 +90,8 @@ class Aggregator:
         "finrl": 0.10,
         "freqtrade": 0.05,
         "vnpy": 0.05,
-        "yanbao_reports": 0.10,  # 券商研报评级（独立信号源）
+        "yanbao_reports": 0.10,
+        "financial_services": 0.10,  # 历史回测（Claude FS RSI/MACD/布林带）
     }
     
     def __init__(self):

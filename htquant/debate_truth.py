@@ -186,6 +186,12 @@ def calc_conviction(project: str, signal: str, ev: ArgumentEvidence,
         conf = ev.excess_return or 0.5  # excess_return 复用为研报置信度
         quality_score = conf * 30  # 0~30 分
         quality_reasons = [f"研报置信度 {conf*100:.0f}%"]
+    elif project == 'financial_services':
+        # 回测信号质量：基于 best_sharpe
+        # best_sharpe 在 data 中（复用 excess_return 传参）
+        sharpe = ev.excess_return or 0.0  # excess_return 复用为 best_sharpe
+        quality_score = max(0.0, sharpe * 30)  # Sharpe 0.5 → 15分
+        quality_reasons = [f"回测Sharpe={sharpe:.3f}"]
     else:
         quality_score, quality_reasons = 0.0, ["未知项目"]
 

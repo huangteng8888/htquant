@@ -31,6 +31,7 @@ class ProjectPaths:
     fincept: str = str(Path.home() / "github/FinceptTerminal")
     gs_quant: str = str(Path.home() / "github/gs-quant-research")
     lean: str = str(Path.home() / "github/Lean")
+    financial_services: str = str(Path.home() / "github/financial-services")
 
 PROJECT_PATHS = ProjectPaths()
 
