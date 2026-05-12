@@ -92,18 +92,28 @@ def get_qcode(stock_code: str) -> Optional[tuple]:
     if stock_code in STOCK_CODE_MAPPING:
         return STOCK_CODE_MAPPING[stock_code]
 
-    # 2. 从 quantdb 动态查询（支持全部A股）
+    # 2. 从 quantdb 动态查询（支持全部A股，优先排除指数/ETF）
     try:
         import sqlite3
         conn = sqlite3.connect(QUANTDB_PATH)
+        # 优先取 A股（排除同名指数如 000901）
         row = conn.execute(
-            "SELECT market, code, name FROM stock_info WHERE code=? AND status='上市' LIMIT 1",
+            "SELECT market, code, name FROM stock_info "
+            "WHERE code=? AND status='上市' AND stock_type='A股' "
+            "LIMIT 1",
             (stock_code,)
         ).fetchone()
+        if not row:
+            # fallback: 取第一条（兼容无 stock_type 字段的表）
+            row = conn.execute(
+                "SELECT market, code, name FROM stock_info "
+                "WHERE code=? AND status='上市' LIMIT 1",
+                (stock_code,)
+            ).fetchone()
         conn.close()
         if row:
-            qcode = f"{row[0]}{row[1]}"   # e.g. "sh600036"
-            return (qcode, row[2])          # (qcode, name)
+            qcode = f"{row[0]}{row[1]}"   # e.g. "sz000901"
+            return (qcode, row[2])        # (qcode, name)
     except Exception:
         pass
 
