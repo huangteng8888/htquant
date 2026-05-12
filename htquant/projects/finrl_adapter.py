@@ -19,7 +19,7 @@ import tempfile
 import numpy as np
 
 from ..dispatcher import Query, ProjectResult
-from ..config import PROJECT_PATHS, QLIB_DATA_PATH
+from ..config import PROJECT_PATHS, QLIB_DATA_PATH, get_qcode
 from .base_adapter import BaseAdapter
 
 logger = logging.getLogger(__name__)
@@ -146,10 +146,16 @@ class FinrlAdapter(BaseAdapter):
         - position_vs_ma20: 收盘价相对 MA20 位置
         - rsi_14: RSI(14)
         """
-        if len(closes) < 25:
+        # 最小5个数据点也能跑基础指标
+        if len(closes) < 5:
             return {}
 
-        closes = np.array(closes, dtype=float)
+        # 数据不足25个时的降级处理
+        min_len = min(len(closes), len(highs), len(lows), len(volumes))
+        closes = np.array(closes[:min_len], dtype=float)
+        highs = np.array(highs[:min_len], dtype=float)
+        lows = np.array(lows[:min_len], dtype=float)
+        volumes = np.array(volumes[:min_len], dtype=float)
         highs = np.array(highs, dtype=float)
         lows = np.array(lows, dtype=float)
         volumes = np.array(volumes, dtype=float)
@@ -309,13 +315,11 @@ class FinrlAdapter(BaseAdapter):
             except:
                 pass
 
-            # 转换股票代码格式
-            if stock_code.startswith('sh') or stock_code.startswith('sz'):
-                qcode = stock_code
-            elif stock_code.startswith('6'):
-                qcode = f"sh{stock_code}"
-            else:
-                qcode = f"sz{stock_code}"
+            # 转换股票代码格式（用 get_qcode 统一获取 qlib 格式）
+            qcode_info = get_qcode(stock_code)
+            if not qcode_info:
+                return None
+            qcode = qcode_info[0]  # 直接使用 qlib 格式，如 'sz000901'
 
             # 计算日期范围
             from datetime import timedelta
@@ -331,6 +335,9 @@ class FinrlAdapter(BaseAdapter):
                 return None
 
             df = df.reset_index()
+            # reset_index 后：instrument(0), datetime(1), $close(2), $high(3), $low(4), $volume(5)
+            # 取第1列(datetime)和第2-5列(数据)，删除instrument列
+            df = df.iloc[:, 1:]  # 去掉 instrument 列
             df.columns = ['date', 'close', 'high', 'low', 'volume']
             df = df.sort_values('date')
 
@@ -407,7 +414,8 @@ class FinrlAdapter(BaseAdapter):
             if hist_data is None:
                 hist_data = self._load_akshare_data(stock_code)
 
-            if hist_data is None or len(hist_data.get('closes', [])) < 25:
+            closes = hist_data.get('closes', []) if hist_data else []
+            if len(closes) < 5:
                 return ProjectResult(
                     project_name="finrl",
                     success=False,

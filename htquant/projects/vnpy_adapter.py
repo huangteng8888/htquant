@@ -189,18 +189,18 @@ class VnpyAdapter(BaseAdapter):
             }
 
     def _load_qlib_data(self, stock_code: str, end_date: str = None) -> Optional[Dict]:
-        """从qlib加载历史数据"""
+        """从qlib加载历史数据
+        
+        stock_code: qlib格式代码，如 'sz000901' 或 'sh600422'
+        """
         try:
             import qlib
             from qlib.data import D
 
             qlib.init(provider_uri=self._data_path)
 
-            qcode_info = get_qcode(stock_code)
-            if not qcode_info:
-                return None
-
-            qcode, stock_name = qcode_info
+            # stock_code 已经是 qlib 格式（qcode），直接使用
+            qcode = stock_code
 
             # 默认加载最近250个交易日数据
             start_time = '2025-01-01'
@@ -230,10 +230,10 @@ class VnpyAdapter(BaseAdapter):
     def _run_cta_strategy(self, qcode: str, stock_name: str, horizon: str) -> Dict[str, Any]:
         """运行CTA策略"""
         try:
-            # 加载数据
-            data = self._load_qlib_data(qcode.split('_')[1] if '_' in qcode else qcode)
+            # 加载数据（qcode 已经是 qlib 格式如 'sz000901'，直接传）
+            data = self._load_qlib_data(qcode)
 
-            if data is None or len(data['closes']) < 30:
+            if data is None or len(data['closes']) < 5:
                 return {'success': False, 'error': '数据不足'}
 
             closes = np.array(data['closes'])

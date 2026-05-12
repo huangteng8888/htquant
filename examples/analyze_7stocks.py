@@ -57,10 +57,33 @@ def analyze_7stocks():
             debate_engine = get_debate_engine()
             debate_results = debate_engine.debate_all(agg.conflicts, project_results)
             
-            for dr in debate_results:
-                print(f"    辩论结果: {dr.final_signal} (共识={dr.consensus})")
-                agg.signal_medium = dr.final_signal
-                agg.confidence = dr.final_confidence
+            # 优先采用收敛辩论结果，否则保留加权投票结果
+            converged_results = [dr for dr in debate_results if dr.converged]
+            if converged_results:
+                # 有收敛 → 取最接近"持有"的收敛结果
+                priorities = aggregator.SIGNAL_PRIORITY
+                best = min(
+                    converged_results,
+                    key=lambda dr: abs(priorities.get(dr.final_signal, 2) - 2.5)
+                )
+                agg.signal_medium = best.final_signal
+                agg.confidence = best.final_confidence
+                print(f"    -> 收敛结果: {best.final_signal}")
+            else:
+                # 无收敛 → 检查是否有修正
+                priorities = aggregator.SIGNAL_PRIORITY
+                orig_priority = priorities.get(agg.signal_medium, 2)
+                best_debate = max(
+                    debate_results,
+                    key=lambda dr: priorities.get(dr.final_signal, 2)
+                )
+                debate_priority = priorities.get(best_debate.final_signal, 2)
+                if debate_priority > orig_priority:
+                    agg.signal_medium = best_debate.final_signal
+                    agg.confidence = best_debate.final_confidence
+                    print(f"    -> 辩论修正: {best_debate.final_signal}")
+                else:
+                    print(f"    -> 无收敛，保留聚合信号")
         
         # 评分
         score = scoring_engine.score(agg)
