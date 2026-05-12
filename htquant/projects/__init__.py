@@ -1,6 +1,38 @@
-"""
-htquant 项目适配器基类
-"""
+# ─── 项目适配器注册表 ──────────────────────────────────────────────────────────
+
+ADAPTERS = {}
+
+
+def register_adapter(name: str, adapter_class):
+    """注册项目适配器（供 Dispatcher 自动发现）"""
+    ADAPTERS[name] = adapter_class
+
+
+# 延迟导入避免循环依赖
+def _register_all():
+    from .tradingagents_adapter import TradingAgentsAdapter
+    from .backtrader_adapter import BacktraderAdapter
+    from .freqtrade_adapter import FreqtradeAdapter
+    from .vnpy_adapter import VnpyAdapter
+    from .qlib_adapter import QlibAdapter
+    from .finrl_adapter import FinrlAdapter
+    from .yanbao_adapter import YanbaoReportAdapter
+
+    register_adapter('tradingagents', TradingAgentsAdapter)
+    register_adapter('backtrader', BacktraderAdapter)
+    register_adapter('freqtrade', FreqtradeAdapter)
+    register_adapter('vnpy', VnpyAdapter)
+    register_adapter('qlib', QlibAdapter)
+    register_adapter('finrl', FinrlAdapter)
+    register_adapter('yanbao_reports', YanbaoReportAdapter)
+
+
+# 自动注册
+try:
+    _register_all()
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).warning(f"适配器自动注册失败: {e}")
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 from pathlib import Path
