@@ -27,6 +27,11 @@ class ProjectPaths:
     freqtrade: str = str(Path.home() / "github/freqtrade")
     vnpy: str = str(Path.home() / "github/vnpy")
 
+    tradingagents: str = str(Path.home() / "github/TradingAgents")
+    fincept: str = str(Path.home() / "github/FinceptTerminal")
+    gs_quant: str = str(Path.home() / "github/gs-quant-research")
+    lean: str = str(Path.home() / "github/Lean")
+
 PROJECT_PATHS = ProjectPaths()
 
 # 持仓周期定义
@@ -75,9 +80,34 @@ STOCK_CODE_MAPPING = {
 # 默认分析的7只验证股票
 DEFAULT_STOCKS = ['000901', '300777', '688089', '300896', '301071', '600422', '300363']
 
+# quantdb 路径（用于动态解析股票代码）
+QUANTDB_PATH = "/mnt/data/金融数据/quantdb/quantdb.sqlite"
+
 def get_qcode(stock_code: str) -> Optional[tuple]:
-    """将6位股票代码转为qlib格式 (qcode, name)"""
-    return STOCK_CODE_MAPPING.get(stock_code)
+    """
+    将6位股票代码转为qlib格式 (qcode, name)
+    优先从 STOCK_CODE_MAPPING 查找，其次从 quantdb 动态查询。
+    """
+    # 1. 优先用硬编码映射（包含中文名称）
+    if stock_code in STOCK_CODE_MAPPING:
+        return STOCK_CODE_MAPPING[stock_code]
+
+    # 2. 从 quantdb 动态查询（支持全部A股）
+    try:
+        import sqlite3
+        conn = sqlite3.connect(QUANTDB_PATH)
+        row = conn.execute(
+            "SELECT market, code, name FROM stock_info WHERE code=? AND status='上市' LIMIT 1",
+            (stock_code,)
+        ).fetchone()
+        conn.close()
+        if row:
+            qcode = f"{row[0]}{row[1]}"   # e.g. "sh600036"
+            return (qcode, row[2])          # (qcode, name)
+    except Exception:
+        pass
+
+    return None
 
 def ensure_dirs():
     """确保必要目录存在"""

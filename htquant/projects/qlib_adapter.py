@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from ..dispatcher import Query, ProjectResult
-from ..config import QLIB_DATA_PATH, STOCK_CODE_MAPPING, HORIZON
+from ..config import QLIB_DATA_PATH, get_qcode, HORIZON
 from .base_adapter import BaseAdapter
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class QlibAdapter(BaseAdapter):
                     error="未指定股票代码"
                 )
             
-            qcode_info = STOCK_CODE_MAPPING.get(stock_code)
+            qcode_info = get_qcode(stock_code)
             if not qcode_info:
                 return ProjectResult(
                     project_name="qlib",
@@ -92,13 +92,16 @@ class QlibAdapter(BaseAdapter):
             data['stock_code'] = stock_code
             data['stock_name'] = stock_name
             
+            # 获取极值事件类型
+            extreme_event_type = query.metadata.get('extreme_event_type')
+            
             # 根据查询类型返回不同结果
             if query.query_type.value == "factor_analysis":
-                signal = self._factor_signal(data)
+                signal = self._factor_signal(data, extreme_event_type)
             elif query.query_type.value == "technical_analysis":
-                signal = self._technical_signal(data)
+                signal = self._technical_signal(data, extreme_event_type)
             else:
-                signal = self._default_signal(data)
+                signal = self._default_signal(data, extreme_event_type)
             
             return ProjectResult(
                 project_name="qlib",
@@ -180,7 +183,101 @@ class QlibAdapter(BaseAdapter):
             'trend': 'up' if (short_trend and med_trend) else ('down' if not short_trend and not med_trend else 'neutral'),
         }
     
-    def _technical_signal(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_extreme_adjustment(self, signal: str, reason: str, 
+                                   extreme_event_type: str,
+                                   rsi: float) -> tuple:
+        """
+        根据极值事件类型调整信号
+        
+        核心修正（基于2026-05-07回测数据）：
+        - W20/W50 LOW触低：短期趋势向下，做多→做空（RSI<50时翻转）
+        - W20/W50 HIGH触高：市场实际下跌，短空方向正确，强化短空
+        - W100/W252：中长期均值回归，保持或增强
+        """
+        if not extreme_event_type:
+            return signal, reason
+        
+        is_short_extreme = extreme_event_type and extreme_event_type.startswith(('W20_', 'W50_'))
+        
+        if is_short_extreme and '_LOW' in extreme_event_type:
+            # W20/W50触低：短期趋势向下，做多信号全部翻转
+            if rsi < 25:
+                if signal == '买入':
+                    signal = '清仓'
+                    reason += ' [极值翻转:W20/W50触低RSI<25，做空]'
+                elif signal == '增持':
+                    signal = '减持'
+                    reason += ' [极值翻转:W20/W50触低RSI<25，做空]'
+                elif signal == '持有':
+                    signal = '减持'
+                    reason += ' [极值翻转:W20/W50触低RSI<25，做空]'
+            elif rsi < 50:
+                if signal == '买入':
+                    signal = '减持'
+                    reason += ' [极值翻转:W20/W50触低RSI<50，做空]'
+                elif signal == '增持':
+                    signal = '减持'
+                    reason += ' [极值翻转:W20/W50触低RSI<50，做空]'
+                elif signal == '持有':
+                    signal = '观望'
+                    reason += ' [极值调整:W20/W50触低RSI<50，中性]'
+        
+        elif is_short_extreme and '_HIGH' in extreme_event_type:
+            # W20/W50触高：市场实际下跌（-2.20%/-6.31%），应强制短空
+            if signal in ['增持', '买入']:
+                signal = '清仓'
+                reason += ' [极值强制:HIGH事件禁止做多，清仓]'
+            elif signal == '观望':
+                signal = '减持'
+                confidence = 0.75
+                reason += ' [极值强制:HIGH事件，转向做空]'
+            elif signal == '持有':
+                signal = '减持'
+                confidence = 0.70
+                reason += ' [极值强制:HIGH事件，转向做空]'
+        
+        elif extreme_event_type and extreme_event_type.startswith('W100_') and '_HIGH' in extreme_event_type and rsi > 70:
+            # W100触高：均值回归明显(-9.71%)，momentum干扰需强制清仓
+            if signal in ['增持', '买入', '持有']:
+                signal = '清仓'
+                reason += ' [极值强制:W100触高均值回归强，强制清仓]'
+            elif signal == '观望':
+                signal = '减持'
+                confidence = 0.75
+                reason += ' [极值强制:W100触高，转向做空]'
+        
+        elif extreme_event_type and extreme_event_type.startswith('W100_') and '_LOW' in extreme_event_type and rsi < 30:
+            # W100触低：均值回归微弱(+0.33%)，做多降级
+            if signal == '买入':
+                signal = '增持'
+                confidence = 0.65
+                reason += ' [极值调整:W100触低均值回归弱，降为增持]'
+            elif signal == '增持':
+                signal = '观望'
+                confidence = 0.55
+                reason += ' [极值调整:W100触低均值回归弱，谨慎]'
+        
+        # W252事件：均值回归极强，增强信号
+        elif 'W252_LOW' in extreme_event_type and '_LOW' in extreme_event_type and rsi < 30:
+            if signal in ['增持', '持有']:
+                signal = '买入'
+                reason += ' [极值增强:W252触低均值回归极强，提升至买入]'
+            elif signal == '观望':
+                signal = '增持'
+                reason += ' [极值增强:W252触低均值回归，提升至增持]'
+        
+        elif 'W252_HIGH' in extreme_event_type and '_HIGH' in extreme_event_type and rsi > 70:
+            if signal in ['减持', '观望']:
+                signal = '清仓'
+                reason += ' [极值增强:W252触高均值回归极强，提升至清仓]'
+            elif signal == '观望':
+                signal = '减持'
+                reason += ' [极值增强:W252触高均值回归，提升至减持]'
+        
+        return signal, reason
+
+    def _technical_signal(self, data: Dict[str, Any],
+                         extreme_event_type: str = None) -> Dict[str, Any]:
         """基于技术分析给出信号"""
         rsi = data['rsi']
         ma_bullish = data['ma_bullish']
@@ -201,19 +298,24 @@ class QlibAdapter(BaseAdapter):
         elif rsi > 75:
             signal = "减持"
             reason = f"RSI={rsi:.1f}严重超买，风险较大"
-        elif trend == 'down' or data['pct_1month'] < -15:
+        elif trend == 'down' or pct_1m < -15:
             signal = "减持"
             reason = f"下降趋势+1月跌{pct_1m:.1f}%，动能弱"
         else:
             signal = "观望"
             reason = f"技术面中性，RSI={rsi:.1f}"
         
+        # 极值事件调整
+        signal, reason = self._apply_extreme_adjustment(signal, reason, extreme_event_type, rsi)
+        
         evidence = [
             f"RSI={rsi:.1f}",
             f"MA多头{'是' if ma_bullish else '否'}",
             f"趋势={trend}",
-            f"1月涨跌={pct_1m:+.1f}%"
+            f"1月涨跌={pct_1m:+.1f}%",
         ]
+        if extreme_event_type:
+            evidence.append(f"极值事件={extreme_event_type}")
         
         return {
             'signal': signal,
@@ -221,7 +323,8 @@ class QlibAdapter(BaseAdapter):
             'evidence': evidence
         }
     
-    def _factor_signal(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _factor_signal(self, data: Dict[str, Any],
+                       extreme_event_type: str = None) -> Dict[str, Any]:
         """因子分析信号（均值回归视角）"""
         rsi = data['rsi']
         
@@ -241,12 +344,16 @@ class QlibAdapter(BaseAdapter):
             signal = "减持"
             reason = f"RSI={rsi:.1f}超买，均值回归压力"
         
+        # 极值事件调整
+        signal, reason = self._apply_extreme_adjustment(signal, reason, extreme_event_type, rsi)
+        
         return {
             'signal': signal,
             'reason': reason,
-            'evidence': [f"RSI={rsi:.1f}"]
+            'evidence': [f"RSI={rsi:.1f}", f"极值事件={extreme_event_type}" if extreme_event_type else "无极值"]
         }
     
-    def _default_signal(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _default_signal(self, data: Dict[str, Any],
+                        extreme_event_type: str = None) -> Dict[str, Any]:
         """默认信号（综合判断）"""
-        return self._technical_signal(data)
+        return self._technical_signal(data, extreme_event_type)

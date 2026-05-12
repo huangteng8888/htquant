@@ -38,7 +38,7 @@ class ProjectResult:
     """单个项目的结果"""
     project_name: str
     success: bool
-    data: Any
+    data: Any = None
     error: Optional[str] = None
     confidence: float = 1.0                      # 置信度 0~1
     signal: str = "观望"                         # 操作信号
@@ -64,16 +64,28 @@ class Dispatcher:
         """初始化各项目适配器"""
         from .projects.qlib_adapter import QlibAdapter
         from .projects.backtrader_adapter import BacktraderAdapter
+        from .projects.momentum_adapter import MomentumAdapter
         from .projects.finrl_adapter import FinrlAdapter
         from .projects.freqtrade_adapter import FreqtradeAdapter
         from .projects.vnpy_adapter import VnpyAdapter
-        
+        from .projects.tradingagents_adapter import TradingAgentsAdapter
+        from .projects.fincept_adapter import FinceptAdapter
+        from .projects.gsquant_adapter import GsQuantAdapter
+        from .projects.lean_adapter import LeanAdapter
+        from .projects.yanbao_adapter import YanbaoReportAdapter
+
         self.projects = {
-            "qlib": QlibAdapter(PROJECT_PATHS.qlib),
-            "backtrader": BacktraderAdapter(PROJECT_PATHS.backtrader),
-            "finrl": FinrlAdapter(PROJECT_PATHS.finrl),
-            "freqtrade": FreqtradeAdapter(PROJECT_PATHS.freqtrade),
-            "vnpy": VnpyAdapter(PROJECT_PATHS.vnpy),
+            "qlib":            QlibAdapter(str(PROJECT_PATHS.qlib)),
+            "backtrader":      BacktraderAdapter(str(PROJECT_PATHS.backtrader)),
+            "momentum":        MomentumAdapter(),
+            "finrl":           FinrlAdapter(),
+            "freqtrade":       FreqtradeAdapter(str(PROJECT_PATHS.freqtrade)),
+            "vnpy":            VnpyAdapter(str(PROJECT_PATHS.vnpy)),
+            "tradingagents":   TradingAgentsAdapter(str(PROJECT_PATHS.tradingagents)),
+            "fincept":         FinceptAdapter(),
+            "gs_quant":        GsQuantAdapter(),
+            "lean":            LeanAdapter(),
+            "yanbao_reports":  YanbaoReportAdapter(),
         }
         
         # 检查哪些项目可用
@@ -128,12 +140,15 @@ class Dispatcher:
     def _get_target_projects(self, query: Query) -> List[str]:
         """根据查询类型确定目标项目"""
         mapping = {
-            QueryType.TECHNICAL_ANALYSIS: ["qlib"],
-            QueryType.BACKTEST: ["backtrader"],
-            QueryType.FACTOR_ANALYSIS: ["qlib"],
-            QueryType.STRATEGY_SIGNAL: ["qlib", "backtrader", "finrl"],
-            QueryType.PORTFOLIO: ["qlib", "backtrader", "finrl"],
-            QueryType.DEBATE_REQUEST: ["qlib", "backtrader"],  # 辩论时两方参与
+            QueryType.TECHNICAL_ANALYSIS: ["qlib", "lean"],
+            QueryType.BACKTEST: ["backtrader", "vnpy", "lean"],
+            QueryType.FACTOR_ANALYSIS: ["qlib", "gs_quant"],
+            QueryType.STRATEGY_SIGNAL: ["qlib", "momentum", "lean", "backtrader",
+                                        "vnpy", "finrl", "fincept", "gs_quant",
+                                        "yanbao_reports"],
+            QueryType.PORTFOLIO: ["qlib", "backtrader", "momentum", "lean"],
+            QueryType.DEBATE_REQUEST: ["qlib", "momentum", "lean", "tradingagents",
+                                       "backtrader", "vnpy", "yanbao_reports"],
         }
         return mapping.get(query.query_type, ["qlib"])
     
