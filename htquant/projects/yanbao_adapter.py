@@ -72,20 +72,40 @@ class YanbaoReportAdapter(BaseAdapter):
     """
     研报信号适配器
 
-    从 reports.db 的 analyst_reports 表中读取券商研报评级，
-    聚合近 N 天的评级情况，生成信号和证据。
+    数据源优先级：
+    1. reports.db（yanbao_query SDK）— 近90天研报
+    2. quantdb.analyst_reports（fallback）— 近365天研报（数据源不同，置信度×0.8）
+
+    信号映射（东财评级 → htquant 5-tier）：
+      强烈推荐/买入    → 增持  (Buy)
+      推荐/增持       → 买入  (Overweight)
+      中性/持有       → 持有  (Hold)
+      减持/卖出       → 减持  (Underweight/Sell)
     """
+
+    # quantdb analyst_reports 评级映射（em_rating_name → 5-tier）
+    QUANTDB_RATING_MAP = {
+        '买入': '增持', '增持': '增持',
+        '推荐': '买入', '谨慎推荐': '持有',
+        '中性': '持有', '持有': '持有',
+        '减持': '减持', '卖出': '减持',
+        '强烈买入': '增持', '强烈推荐': '增持',
+        '同步大势': '持有', '跟随大势': '持有',
+    }
 
     def __init__(
         self,
         project_path: str = "/home/ht/github/yanbao2-analytics",
         cache_path: str = "/tmp/yanbao_signals.db",
-        days: int = 30,
+        days: int = 90,  # 扩大到90天
+        quantdb_path: str = "/mnt/data/金融数据/quantdb/quantdb.sqlite",
     ):
         super().__init__(project_path)
         self.days = days
         self.cache_path = cache_path
+        self.quantdb_path = quantdb_path
         self._rq = None
+        self._quantdb_conn = None
 
     def _check_available(self) -> bool:
         """检查 reports.db 是否可达。"""
@@ -98,8 +118,61 @@ class YanbaoReportAdapter(BaseAdapter):
             self._rq = rq
             return True
         except Exception as e:
-            logger.warning(f"YanbaoReportAdapter 不可用: {e}")
+            logger.warning(f"[YanbaoReportAdapter] reports.db 不可用: {e}")
             return False
+
+    def _get_quantdb_rating(self, stock_code: str, days: int = 365) -> Optional[dict]:
+        """从 quantdb.analyst_reports 获取评级（fallback，数据源不一致，置信度×0.8）"""
+        try:
+            import sqlite3
+            cutoff = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+            conn = sqlite3.connect(self.quantdb_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT code, stock_name, org_name, em_rating_name, rating_value, publish_date
+                FROM analyst_reports
+                WHERE code = ?
+                  AND publish_date >= ?
+                  AND rating_value IS NOT NULL
+                ORDER BY publish_date DESC
+            """, (stock_code, cutoff))
+            rows = cur.fetchall()
+            conn.close()
+
+            if not rows:
+                return None
+
+            ratings = [r[4] for r in rows if r[4] is not None]
+            labels = [r[3] for r in rows if r[3]]
+            brokers = list(dict.fromkeys(r[2] for r in rows if r[2]))
+
+            avg_rating = sum(ratings) / len(ratings) if ratings else None
+
+            # 信号生成（quantdb 用自己的评级映射）
+            signal_label = 'NEUTRAL'
+            if labels:
+                label_count = {}
+                for lbl in labels:
+                    mapped = self.QUANTDB_RATING_MAP.get(lbl, '持有')
+                    label_count[mapped] = label_count.get(mapped, 0) + 1
+                if label_count:
+                    signal_label = max(label_count, key=label_count.get)
+
+            return {
+                'stock_code': stock_code,
+                'stock_name': rows[0][1] if rows[0][1] else stock_code,
+                'coverage': len(rows),
+                'avg_rating': round(avg_rating, 3) if avg_rating else None,
+                'max_rating': max(ratings) if ratings else None,
+                'min_rating': min(ratings) if ratings else None,
+                'brokers': brokers[:10],
+                'latest_date': rows[0][5] if rows[0][5] else '',
+                'signal_label': signal_label,
+                'source': 'quantdb',  # 标记为 fallback 数据源
+            }
+        except Exception as e:
+            logger.warning(f"[YanbaoReportAdapter] quantdb fallback 失败 {stock_code}: {e}")
+            return None
 
     def execute(self, query: Query) -> ProjectResult:
         """
@@ -135,24 +208,33 @@ class YanbaoReportAdapter(BaseAdapter):
         for code in stock_codes:
             try:
                 rating_data = self._rq.get_rating_signal(code, days=self.days)
+                source = 'reports.db'
+
+                # Fallback: reports.db 无数据 → 查 quantdb.analyst_reports
+                if not (rating_data and rating_data.get("coverage", 0) > 0):
+                    rating_data = self._get_quantdb_rating(code, days=365)
+                    source = 'quantdb'
+
                 if rating_data and rating_data.get("coverage", 0) > 0:
+                    rating_data['source'] = source
                     results[code] = rating_data
                     signal = self._label_to_signal(rating_data.get("signal_label", "HOLD"))
                     signals.append(signal)
-                    # 收集证据
+
                     cnt = rating_data.get("coverage", 0)
                     avg_rating = rating_data.get("avg_rating", "N/A")
                     latest_date = rating_data.get("latest_date", "")
                     brokers = rating_data.get("brokers", [])
+                    fb_note = " [quantdb]" if source == "quantdb" else ""
                     ev = (
                         f"{code}近{self.days}天共{cnt}篇({latest_date})，"
-                        f"均评{avg_rating}，{len(brokers)}家券商。"
+                        f"均评{avg_rating}，{len(brokers)}家券商{fb_note}。"
                     )
                     evidence_list.append(ev)
                 else:
                     results[code] = None
             except Exception as e:
-                logger.warning(f"获取 {code} 研报信号失败: {e}")
+                logger.warning(f"[YanbaoReportAdapter] 获取 {code} 研报信号失败: {e}")
                 results[code] = None
 
         if not signals:
@@ -162,7 +244,7 @@ class YanbaoReportAdapter(BaseAdapter):
                 data=results,
                 signal="观望",
                 confidence=0.0,
-                reason="近30天无研报覆盖",
+                reason="近90天 reports.db 无研报覆盖，且 quantdb 365天内也无数据",
             )
 
         # 聚合信号：取最乐观的信号
@@ -183,10 +265,13 @@ class YanbaoReportAdapter(BaseAdapter):
         )
 
     def _label_to_signal(self, label: str) -> str:
-        """将 signal_label (BUY/SELL/HOLD) 转为 htquant 信号。"""
+        """将 signal_label（中文或BUY/SELL/HOLD英文）转为 htquant 信号。"""
+        if label in ('增持', '买入', '持有', '减持', '清仓'):
+            return label
         mapping = {
             "BUY": "增持",
             "OVERWEIGHT": "买入",
+            "NEUTRAL": "持有",
             "HOLD": "持有",
             "UNDERWEIGHT": "减持",
             "SELL": "清仓",

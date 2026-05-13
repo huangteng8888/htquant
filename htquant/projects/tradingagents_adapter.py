@@ -209,7 +209,35 @@ class TradingAgentsAdapter(BaseAdapter):
             logger.error(f"[TradingAgents] API 调用失败 {stock_code}/{date_str}: {e}")
             return {'rating': 'Hold', 'reason': f'API错误: {str(e)[:100]}',
                     'confidence': 0.50}
-    
+
+    def _call_rest_api_fallback(self, stock_code: str) -> Dict[str, Any]:
+        """缓存空时，从 AI-Trader REST API 获取最新信号作为 fallback"""
+        try:
+            import httpx
+            # 获取该股票的最新信号
+            url = f"http://localhost:8000/api/signals/grouped?limit=10"
+            resp = httpx.get(url, timeout=10.0)
+            if resp.status_code != 200:
+                return {'rating': None, 'reason': f'AI-Trader API错误:{resp.status_code}', 'confidence': 0.0}
+
+            data = resp.json()
+            # 在 agents 信号中找匹配该股票的
+            ticker = STOCK_CODE_MAPPING.get(stock_code, stock_code)
+            for agent_data in data.get('agents', []):
+                for sig in agent_data.get('signals', []):
+                    sym = sig.get('symbol', '')
+                    if ticker.upper().replace('.SS', '').replace('.SZ', '') in sym.upper().replace('.SS', '').replace('.SZ', ''):
+                        rating = sig.get('rating', 'Hold')
+                        reason = sig.get('reason', sig.get('message', ''))[:300]
+                        return {
+                            'rating': rating,
+                            'reason': f"[TA-REST:{rating}] {reason}",
+                            'confidence': RATING_CONFIDENCE.get(rating, 0.55),
+                        }
+            return {'rating': None, 'reason': 'AI-Trader缓存空且无匹配信号', 'confidence': 0.0}
+        except Exception as e:
+            return {'rating': None, 'reason': f'REST fallback失败:{str(e)[:60]}', 'confidence': 0.0}
+
     def execute(self, query: Query) -> ProjectResult:
         """
         执行查询（来自 dispatcher）。
@@ -240,14 +268,26 @@ class TradingAgentsAdapter(BaseAdapter):
                 (stock, date_str)).fetchone()
             
             if row is None:
+                # Fallback 1: 尝试从 AI-Trader REST API 获取
+                rest_result = self._call_rest_api_fallback(stock)
+                if rest_result.get('rating'):
+                    signal = RATING_TO_SIGNAL.get(rest_result['rating'], '持有')
+                    return ProjectResult(
+                        project_name='tradingagents',
+                        success=True,
+                        data={'rating': rest_result['rating'], 'source': 'rest_api'},
+                        signal=signal,
+                        confidence=rest_result.get('confidence', 0.50),
+                        reason=rest_result.get('reason', ''),
+                    )
                 return ProjectResult(
                     project_name='tradingagents',
-                    success=False,
+                    success=True,
                     data=None,
                     error=f'缓存无数据: {stock}/{date_str}',
                     signal='观望',
-                    confidence=0.50,
-                    reason='TradingAgents预计算缓存中无此日期数据',
+                    confidence=0.30,
+                    reason='TradingAgents预计算缓存无数据，REST API也无匹配信号',
                 )
             
             rating, reason, confidence = row

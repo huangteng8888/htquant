@@ -92,7 +92,39 @@ class Aggregator:
         "vnpy": 0.05,
         "yanbao_reports": 0.10,
         "financial_services": 0.10,  # 历史回测（Claude FS RSI/MACD/布林带）
+        "lean": 0.15,                # lean engine
+        "gs_quant": 0.15,            # Goldman Sachs gs_quant
+        "tradingagents": 0.10,       # TradingAgents LLM
+        "fincept": 0.10,             # Fincept 实时数据
     }
+
+    # 各 adapter 的典型最大置信度（用于 cross-adapter 归一化）
+    # 格式: adapter → (typical_min, typical_max)
+    # 归一化公式: norm = (raw - min) / (max - min)，结果clamp到[0.5, 1.0]
+    ADAPTER_CONF_RANGES = {
+        "qlib":                 (0.50, 0.80),
+        "backtrader":           (0.55, 0.75),
+        "momentum":             (0.60, 0.80),
+        "finrl":                (0.55, 0.80),
+        "freqtrade":            (0.50, 0.70),
+        "vnpy":                 (0.50, 0.82),
+        "yanbao_reports":       (0.55, 0.75),
+        "financial_services":    (0.40, 0.70),
+        "lean":                 (0.60, 0.88),
+        "gs_quant":             (0.30, 0.70),
+        "tradingagents":        (0.30, 0.80),
+        "fincept":              (0.50, 0.75),
+    }
+
+    def _normalize_confidence(self, raw_conf: float, adapter: str) -> float:
+        """将各 adapter 原始置信度归一化到 [0.5, 1.0] 统一标尺"""
+        conf_min, conf_max = self.ADAPTER_CONF_RANGES.get(adapter, (0.50, 0.70))
+        span = conf_max - conf_min
+        if span <= 0:
+            return 0.70
+        # Min-max normalize to [0.5, 1.0]
+        normalized = 0.5 + 0.5 * (raw_conf - conf_min) / span
+        return max(0.50, min(1.0, normalized))
     
     def __init__(self):
         self.conflicts = []
@@ -143,7 +175,9 @@ class Aggregator:
                 f"(最高{top_signal}仅{top_weight_ratio*100:.0f}%<50%或<1.5x)"
             )
         
-        avg_confidence = np.mean(confidences) if confidences else 0.0
+        # 使用归一化置信度计算平均置信度
+        norm_confs = [self._normalize_confidence(c, p) for p, c in zip(valid_results.keys(), confidences)]
+        avg_confidence = np.mean(norm_confs) if norm_confs else 0.0
         
         # 检测冲突（用于辩论）
         conflicts = self._detect_conflicts(valid_results, stock_code, horizon)
@@ -164,7 +198,7 @@ class Aggregator:
             position_weight=weight,
             confidence=avg_confidence,
             project_signals={k: v.signal for k, v in valid_results.items()},
-            project_confidences={k: v.confidence for k, v in valid_results.items()},
+            project_confidences={k: self._normalize_confidence(v.confidence, k) for k, v in valid_results.items()},
             conflicts=conflicts,
             reasons=reasons,
             evidence_strength=evidence_strength,
@@ -187,13 +221,14 @@ class Aggregator:
         if not signals:
             return "观望", 0.0, 0.0
         
-        # 按项目聚合权重
+        # 按项目聚合权重（使用归一化置信度）
         signal_weights = {}
         for (project, result) in valid_results.items():
             sig = result.signal
             proj_weight = self.PROJECT_WEIGHTS.get(project, 0.2)
-            conf = result.confidence
-            w = proj_weight * conf
+            raw_conf = result.confidence
+            norm_conf = self._normalize_confidence(raw_conf, project)
+            w = proj_weight * norm_conf
             signal_weights[sig] = signal_weights.get(sig, 0) + w
         
         if not signal_weights:
@@ -220,10 +255,11 @@ class Aggregator:
             return "观望"
         
         scores = Counter()
-        for signal, conf, (project, result) in zip(signals, confidences, valid_results.items()):
+        for signal, raw_conf, (project, result) in zip(signals, confidences, valid_results.items()):
             priority = self.SIGNAL_PRIORITY.get(signal, 2)
             project_weight = self.PROJECT_WEIGHTS.get(project, 0.2)
-            scores[signal] += project_weight * conf * priority
+            norm_conf = self._normalize_confidence(raw_conf, project)
+            scores[signal] += project_weight * norm_conf * priority
         
         if not scores:
             return "观望"

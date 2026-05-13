@@ -102,18 +102,18 @@ class Dispatcher:
     def dispatch(self, query: Query) -> Dict[str, ProjectResult]:
         """
         分发查询到各项目
-        
+
         Args:
             query: Query对象
-            
+
         Returns:
             Dict[项目名, ProjectResult]
         """
         results = {}
-        
+
         # 根据查询类型决定调用哪些项目
         target_projects = self._get_target_projects(query)
-        
+
         for project_name in target_projects:
             if project_name not in self.available:
                 results[project_name] = ProjectResult(
@@ -123,7 +123,7 @@ class Dispatcher:
                     error=f"项目 {project_name} 不可用"
                 )
                 continue
-            
+
             adapter = self.available[project_name]
             try:
                 result = adapter.execute(query)
@@ -136,8 +136,60 @@ class Dispatcher:
                     data=None,
                     error=str(e)
                 )
-        
+
         return results
+
+    def dispatch_per_stock(self, query: Query) -> Dict[str, Dict[str, ProjectResult]]:
+        """
+        按股票分发查询（per-stock 模式）
+
+        对 query.stock_codes 中的每只股票，分别调用所有 adapter，
+        确保每只股票获得独立的 adapter 信号（而非批量级信号）。
+
+        Returns:
+            Dict[stock_code, Dict[adapter_name, ProjectResult]]
+        """
+        # Query 和 ProjectResult 都定义在同一个文件，直接引用
+        stock_codes = query.stock_codes or []
+        target_projects = self._get_target_projects(query)
+
+        # 初始化：每只股票一个空结果字典
+        per_stock_results: Dict[str, Dict[str, ProjectResult]] = {
+            code: {} for code in stock_codes
+        }
+
+        # 对每只股票单独构建 Query 并调用所有 adapter
+        for code in stock_codes:
+            single_query = Query(
+                stock_codes=[code],
+                query_type=query.query_type,
+                metadata={**query.metadata, 'batch_code': code}
+            )
+
+            for project_name in target_projects:
+                if project_name not in self.available:
+                    per_stock_results[code][project_name] = ProjectResult(
+                        project_name=project_name,
+                        success=False,
+                        data=None,
+                        error=f"项目 {project_name} 不可用"
+                    )
+                    continue
+
+                adapter = self.available[project_name]
+                try:
+                    result = adapter.execute(single_query)
+                    per_stock_results[code][project_name] = result
+                except Exception as e:
+                    logger.error(f"[htquant] {project_name} 执行失败 ({code}): {e}")
+                    per_stock_results[code][project_name] = ProjectResult(
+                        project_name=project_name,
+                        success=False,
+                        data=None,
+                        error=str(e)
+                    )
+
+        return per_stock_results
     
     def _get_target_projects(self, query: Query) -> List[str]:
         """根据查询类型确定目标项目"""
