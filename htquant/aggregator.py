@@ -113,7 +113,7 @@ class Aggregator:
         "lean":                 (0.60, 0.88),
         "gs_quant":             (0.30, 0.70),
         "tradingagents":        (0.30, 0.80),
-        "fincept":              (0.50, 0.75),
+        "fincept":              (0.50, 0.80),
     }
 
     def _normalize_confidence(self, raw_conf: float, adapter: str) -> float:
@@ -124,7 +124,7 @@ class Aggregator:
             return 0.70
         # Min-max normalize to [0.5, 1.0]
         normalized = 0.5 + 0.5 * (raw_conf - conf_min) / span
-        return max(0.50, min(1.0, normalized))
+        return max(0.55, min(1.0, normalized))  # 全局最低 0.55，避免 conf=0 导致完全无权重
     
     def __init__(self):
         self.conflicts = []

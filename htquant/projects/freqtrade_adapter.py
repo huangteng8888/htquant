@@ -90,12 +90,14 @@ class FreqtradeAdapter(BaseAdapter):
         # 识别加密货币
         pair = self._identify_crypto(stock)
         if pair is None:
+            # 非加密货币 → 降级为观望（不视为失败，避免打断聚合流程）
             return ProjectResult(
                 project_name='freqtrade',
-                success=False,
+                success=True,
                 signal='观望',
-                confidence=0.50,
-                error=f'Freqtrade仅适用于加密货币，{stock} 不是数字货币',
+                confidence=0.45,
+                reason=f'{stock} 非加密货币（freqtrade 专用）',
+                data={'asset_type': 'non_crypto', 'degraded': True},
             )
 
         # 获取数据并计算信号

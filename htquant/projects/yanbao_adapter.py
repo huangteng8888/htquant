@@ -187,7 +187,7 @@ class YanbaoReportAdapter(BaseAdapter):
                 data=None,
                 error="reports.db 不可用或 yanbao_query 加载失败",
                 signal="观望",
-                confidence=0.0,
+                confidence=0.30,
             )
 
         stock_codes = query.stock_codes
@@ -197,7 +197,7 @@ class YanbaoReportAdapter(BaseAdapter):
                 success=True,
                 data={},
                 signal="观望",
-                confidence=0.0,
+                confidence=0.30,
                 reason="无股票代码",
             )
 
@@ -238,12 +238,13 @@ class YanbaoReportAdapter(BaseAdapter):
                 results[code] = None
 
         if not signals:
+            # 真实无研报数据：返回低置信度观望（而非 conf=0.0 导致权重归零）
             return ProjectResult(
                 project_name="yanbao_reports",
                 success=True,
                 data=results,
                 signal="观望",
-                confidence=0.0,
+                confidence=0.35,
                 reason="近90天 reports.db 无研报覆盖，且 quantdb 365天内也无数据",
             )
 

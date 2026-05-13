@@ -286,8 +286,8 @@ class TradingAgentsAdapter(BaseAdapter):
                     data=None,
                     error=f'缓存无数据: {stock}/{date_str}',
                     signal='观望',
-                    confidence=0.30,
-                    reason='TradingAgents预计算缓存无数据，REST API也无匹配信号',
+                    confidence=0.45,
+                    reason='TradingAgents预计算缓存无数据，REST API也无匹配信号（标记为低权重）',
                 )
             
             rating, reason, confidence = row
