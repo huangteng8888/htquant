@@ -82,20 +82,28 @@ class Aggregator:
         "清仓": 0.0,
     }
     
-    # 项目权重（momentum权重最高，因为识别趋势能力强）
+    # 项目权重（总和约 1.50，按 A股量化范式分配）
+    # 原则：机器学习/回测 > 单一技术指标 > 辅助数据源
+    # - qlib/backtrader: 基于真实历史数据回测，最可靠
+    # - momentum: 趋势指标，但仅单一因子，权重适中
+    # - lean/gs_quant: 量化引擎，有模型支撑
+    # - finrl: DRL强化学习，实验性强
+    # - vnpy: CTA策略，对个股信号有参考价值
+    # - yanbao_reports/fincept/tradingagents: 辅助信息源
+    # - freqtrade: 仅适用加密货币，A股最低权重
     PROJECT_WEIGHTS = {
-        "qlib": 0.25,
-        "backtrader": 0.20,
-        "momentum": 0.35,
-        "finrl": 0.10,
-        "freqtrade": 0.05,
-        "vnpy": 0.05,
-        "yanbao_reports": 0.10,
-        "financial_services": 0.10,  # 历史回测（Claude FS RSI/MACD/布林带）
-        "lean": 0.15,                # lean engine
-        "gs_quant": 0.15,            # Goldman Sachs gs_quant
-        "tradingagents": 0.10,       # TradingAgents LLM
-        "fincept": 0.10,             # Fincept 实时数据
+        "qlib":                 0.22,
+        "backtrader":           0.22,
+        "momentum":             0.18,
+        "lean":                 0.15,
+        "gs_quant":             0.12,
+        "finrl":                0.10,
+        "vnpy":                 0.08,
+        "yanbao_reports":       0.10,
+        "financial_services":   0.08,
+        "tradingagents":        0.08,
+        "fincept":              0.10,
+        "freqtrade":            0.05,
     }
 
     # 各 adapter 的典型最大置信度（用于 cross-adapter 归一化）
@@ -256,9 +264,12 @@ class Aggregator:
         
         scores = Counter()
         for signal, raw_conf, (project, result) in zip(signals, confidences, valid_results.items()):
-            priority = self.SIGNAL_PRIORITY.get(signal, 2)
             project_weight = self.PROJECT_WEIGHTS.get(project, 0.2)
             norm_conf = self._normalize_confidence(raw_conf, project)
+            # 优先级系数：增持×1.5, 观望×1.25, 减持/清仓×1.0
+            # 轻微偏向做多，避免多空 adapter 数量不均时出现系统性偏差
+            priority_map = {'增持': 1.5, '买入': 1.5, '持有': 1.25, '观望': 1.25, '减持': 1.0, '清仓': 1.0}
+            priority = priority_map.get(signal, 1.25)
             scores[signal] += project_weight * norm_conf * priority
         
         if not scores:
