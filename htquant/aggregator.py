@@ -266,11 +266,9 @@ class Aggregator:
         for signal, raw_conf, (project, result) in zip(signals, confidences, valid_results.items()):
             project_weight = self.PROJECT_WEIGHTS.get(project, 0.2)
             norm_conf = self._normalize_confidence(raw_conf, project)
-            # 优先级系数：增持×1.5, 观望×1.25, 减持/清仓×1.0
-            # 轻微偏向做多，避免多空 adapter 数量不均时出现系统性偏差
-            priority_map = {'增持': 1.5, '买入': 1.5, '持有': 1.25, '观望': 1.25, '减持': 1.0, '清仓': 1.0}
-            priority = priority_map.get(signal, 1.25)
-            scores[signal] += project_weight * norm_conf * priority
+            # 完全中性乘数：各信号等权，仅通过项目权重×置信度决定
+            # 信号方向本身不享有额外权重偏置
+            scores[signal] += project_weight * norm_conf
         
         if not scores:
             return "观望"
